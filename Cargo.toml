@@ -1,0 +1,14 @@
+[workspace]
+resolver = "3"
+members = [
+    "apps/agent-server",
+    "packages/agent-contracts",
+    "packages/agent-runtime",
+    "packages/agent-store",
+    "packages/agent-gateways",
+    "packages/agent-test-support",
+    "tests/harness-fixture",
+]
+
+[workspace.package]
+edition = "2024"
