@@ -1,11 +1,11 @@
 # Agent platform
 
-The first nine implementation parts provide a harness-facing Rust contract, a
-registry, durable PostgreSQL persistence, authenticated session/input/wait APIs,
-the session scheduler, gateway dispatch, asynchronous result delivery, inspection,
-and replayable application updates.
-See [system working](system_working.md), [design decisions](system_design_decisions.md),
-[schemas](schemas.md), and [API endpoints](api_endpoints.md) for the broader design.
+The implemented platform provides a harness-facing Rust contract, a registry,
+durable PostgreSQL persistence, authenticated session/input/wait APIs, the session
+scheduler, gateway dispatch, asynchronous result delivery, inspection, replayable
+application updates, and retention/operational workers.
+See [agent-server/docs](apps/agent-server/docs/README.md) for the implemented
+architecture, persistence model, HTTP API, configuration, and harness integration.
 
 | Crate | Role |
 | --- | --- |
@@ -169,8 +169,9 @@ PostgreSQL and represent shared state. Do not sum the shared gauges across serve
 replicas. Logs are JSON by default and include request IDs and worker correlation
 fields without logging request payloads.
 
-See [harness_guide.md](harness_guide.md) for the contract used by a real harness
-crate. Run `sh scripts/verify.sh` with `TEST_DATABASE_URL` set to run the full
+See the [harness integration guide](apps/agent-server/docs/harness-integration.md)
+for the contract used by a real harness crate. Run `sh scripts/verify.sh` with
+`TEST_DATABASE_URL` set to run the full
 workspace and disposable-PostgreSQL test suites; ordinary `cargo test` skips the
 ignored database tests.
 
