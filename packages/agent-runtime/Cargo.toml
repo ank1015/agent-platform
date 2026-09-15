@@ -1,0 +1,29 @@
+[package]
+name = "agent-runtime"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+agent-contracts = { path = "../agent-contracts" }
+agent-gateways = { path = "../agent-gateways" }
+agent-store = { path = "../agent-store" }
+async-trait = "0.1"
+chrono = "0.4"
+futures-util = "0.3"
+jsonschema = { version = "0.50", default-features = false }
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio-util = "0.7"
+tracing = "0.1"
+uuid = { version = "1", features = ["serde"] }
+
+[dev-dependencies]
+harness-fixture = { path = "../../tests/harness-fixture" }
+async-trait = "0.1"
+axum = "0.8"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres"] }
+url = "2"
+uuid = { version = "1", features = ["v4"] }
