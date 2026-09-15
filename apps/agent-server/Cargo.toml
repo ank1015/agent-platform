@@ -1,0 +1,39 @@
+[package]
+name = "agent-server"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+agent-contracts = { path = "../../packages/agent-contracts" }
+agent-gateways = { path = "../../packages/agent-gateways" }
+agent-runtime = { path = "../../packages/agent-runtime" }
+agent-store = { path = "../../packages/agent-store" }
+async-stream = "0.3"
+axum = "0.8"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive", "env"] }
+http = "1"
+futures-util = "0.3"
+jsonschema = { version = "0.50", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres"] }
+thiserror = "2"
+subtle = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time", "io-util"] }
+tokio-util = "0.7"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+url = "2"
+uuid = { version = "1", features = ["serde", "v4"] }
+
+[dev-dependencies]
+harness-fixture = { path = "../../tests/harness-fixture" }
+async-trait = "0.1"
+hex = "0.4"
+hmac = "0.12"
+http-body-util = "0.1"
+schemars = "1"
+sha2 = "0.10"
+tower = { version = "0.5", features = ["util"] }
