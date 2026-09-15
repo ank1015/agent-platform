@@ -1,0 +1,15 @@
+[package]
+name = "agent-test-support"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+agent-contracts = { path = "../agent-contracts" }
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+
+[dev-dependencies]
+chrono = "0.4"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

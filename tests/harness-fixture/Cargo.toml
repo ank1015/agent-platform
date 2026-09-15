@@ -1,0 +1,19 @@
+[package]
+name = "harness-fixture"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+agent-contracts = { path = "../../packages/agent-contracts" }
+agent-runtime = { path = "../../packages/agent-runtime" }
+agent-test-support = { path = "../../packages/agent-test-support" }
+async-trait = "0.1"
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+chrono = "0.4"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
