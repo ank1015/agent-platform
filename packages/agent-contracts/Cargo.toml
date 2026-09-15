@@ -1,0 +1,14 @@
+[package]
+name = "agent-contracts"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+process-execution-protocol = { path = "../../../execution-providers/packages/process-execution-protocol" }
+process-execution-core = { path = "../../../execution-providers/packages/process-execution-core" }
+schemars = { version = "1", features = ["uuid1", "chrono04"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+uuid = { version = "1", features = ["serde", "v4"] }
