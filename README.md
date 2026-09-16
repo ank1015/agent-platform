@@ -175,6 +175,36 @@ for the contract used by a real harness crate. Run `sh scripts/verify.sh` with
 workspace and disposable-PostgreSQL test suites; ordinary `cargo test` skips the
 ignored database tests.
 
+For local gateway callbacks, `scripts/dev-agent-server-ngrok.sh` builds and migrates
+the server, waits for readiness, and exposes it through the account's fixed ngrok
+HTTPS domain. Supply the normal server configuration through the environment:
+
+```sh
+AGENT_DATABASE_URL='postgresql:///agent_platform' \
+AGENT_SERVICE_TOKENS='replace-with-a-local-backend-token' \
+./scripts/dev-agent-server-ngrok.sh
+```
+
+The default public base URL is `https://streak-upscale-okay.ngrok-free.dev`; the
+script requests that name explicitly, so it does not change between runs. Override
+it with `NGROK_DOMAIN` if the assigned ngrok domain changes. Callback URLs append
+`/v1/callbacks/llm/<connection-id>` or
+`/v1/callbacks/execution/<connection-id>`.
+
+The launcher automatically adds the `execution-primary` and `llm-primary` gateway
+connections and their callback verifiers. It reads
+`agent-server-execution-gateway-api-key`,
+`agent-server-execution-gateway-webhook-secret`,
+`agent-server-llm-gateway-api-key`, and
+`agent-server-llm-gateway-webhook-secret` from Secret Manager in project
+`project-2c02a9f6-1ff5-461d-ae0`. No gateway secret is stored in this repository.
+Set `AGENT_EXECUTION_GATEWAY_AUTO_CONFIG=false` or
+`AGENT_LLM_GATEWAY_AUTO_CONFIG=false` to configure that gateway manually. Harnesses
+should select `execution-primary` for execution operations and `llm-primary` for LLM
+operations.
+Any additional `AGENT_GATEWAY_CONNECTIONS` and `AGENT_GATEWAY_CALLBACKS` entries
+supplied by the caller are preserved.
+
 `GET /v1/sessions/{sessionId}/updates` reads the durable update log, and
 `GET /v1/sessions/{sessionId}/updates/stream` replays it as SSE. Each SSE `id` is
 the per-session update sequence; reconnection uses `Last-Event-ID` or an initial
@@ -350,9 +380,11 @@ references. Resolving the wait and inserting its `wait_resumed` event is one
 transaction. Database wall-clock checks decide expiration races; an exact retry of
 an already accepted reply returns its original acknowledgement.
 
-The production registry is intentionally empty until a real harness crate is added
-to `build_registry`. Tests inject a fixture registry without shipping that fixture
-as a production harness.
+The production registry includes `basic-codex` version `1`. Its server-owned
+gateway routes default to `llm-primary` and `execution-primary`; override them
+with `AGENT_LLM_CONNECTION_ID` and `AGENT_EXECUTION_CONNECTION_ID`. Tests can
+still inject fixture registries without shipping those fixtures as production
+harnesses.
 
 HTTP errors use `{"error":{"code","message","request_id"}}`. The same request ID
 is returned in `x-request-id`; request logs record that ID, method, matched route,
