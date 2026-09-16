@@ -14,11 +14,12 @@ use agent_gateways::{
 use agent_runtime::{
     CompletionRuntime, CompletionSettings, DispatcherSettings, HarnessRegistry,
     OperationDispatcher, RequestCleanupSettings, RequestCleanupWorker, SchedulerSettings,
-    SessionScheduler, WaitExpirationSettings, WaitExpirationWorker,
+    SessionScheduler, WaitExpirationSettings, WaitExpirationWorker, WorkSignal,
 };
-use agent_store::Store;
+use agent_store::{CALLBACK_READY_CHANNEL, OPERATION_READY_CHANNEL, Store};
 use axum::{Router, extract::DefaultBodyLimit, middleware, routing::get};
 use basic_codex_harness::BasicCodexHarness;
+use sqlx::postgres::PgListener;
 use std::{
     future::{Future, IntoFuture},
     net::SocketAddr,
@@ -513,9 +514,13 @@ where
     let gateways = Arc::new(GatewayRegistry::from_configs(
         settings.gateway_connections.clone(),
     )?);
+    let operation_work = WorkSignal::default();
+    let callback_work = WorkSignal::default();
     let dispatcher =
-        OperationDispatcher::new(store.clone(), gateways.clone(), settings.dispatcher.clone())?;
-    let completion = CompletionRuntime::new(store.clone(), gateways, settings.completion.clone())?;
+        OperationDispatcher::new(store.clone(), gateways.clone(), settings.dispatcher.clone())?
+            .with_work_signal(operation_work.clone());
+    let completion = CompletionRuntime::new(store.clone(), gateways, settings.completion.clone())?
+        .with_work_signal(callback_work.clone());
     let wait_expiration =
         WaitExpirationWorker::new(store.clone(), settings.wait_expiration.clone())?;
     let request_cleanup =
@@ -543,6 +548,8 @@ where
         let wait_stop = runtime_stop.clone();
         let request_cleanup_stop = runtime_stop.clone();
         let updates_stop = runtime_stop.clone();
+        let notification_stop = runtime_stop.clone();
+        let notification_pool = store.pool().clone();
         let update_store = store.clone();
         let update_retention = settings.update_retention;
         let update_cleanup_poll = settings.update_cleanup_poll;
@@ -587,6 +594,16 @@ where
                 .await;
                 Ok::<(), ServerError>(())
             },
+            async {
+                run_work_notifications(
+                    notification_pool,
+                    operation_work,
+                    callback_work,
+                    notification_stop,
+                )
+                .await;
+                Ok::<(), ServerError>(())
+            },
         )?;
         Ok::<(), ServerError>(())
     };
@@ -626,6 +643,54 @@ where
                 .map_err(|_| ServerError::ShutdownTimedOut)?
                 ?;
             result.map_err(ServerError::Io)
+        }
+    }
+}
+
+async fn run_work_notifications(
+    pool: sqlx::PgPool,
+    operation_work: WorkSignal,
+    callback_work: WorkSignal,
+    stop: CancellationToken,
+) {
+    loop {
+        let mut listener = match PgListener::connect_with(&pool).await {
+            Ok(listener) => listener,
+            Err(error) => {
+                tracing::warn!(%error, "could not connect durable-work notification listener");
+                tokio::select! {
+                    _ = stop.cancelled() => return,
+                    _ = tokio::time::sleep(Duration::from_secs(1)) => continue,
+                }
+            }
+        };
+        if let Err(error) = listener.listen(OPERATION_READY_CHANNEL).await {
+            tracing::warn!(%error, "could not listen for operation work");
+            tokio::select! {
+                _ = stop.cancelled() => return,
+                _ = tokio::time::sleep(Duration::from_secs(1)) => continue,
+            }
+        }
+        if let Err(error) = listener.listen(CALLBACK_READY_CHANNEL).await {
+            tracing::warn!(%error, "could not listen for callback work");
+            tokio::select! {
+                _ = stop.cancelled() => return,
+                _ = tokio::time::sleep(Duration::from_secs(1)) => continue,
+            }
+        }
+        loop {
+            tokio::select! {
+                _ = stop.cancelled() => return,
+                notification = listener.recv() => match notification {
+                    Ok(notification) if notification.channel() == OPERATION_READY_CHANNEL => operation_work.notify(),
+                    Ok(notification) if notification.channel() == CALLBACK_READY_CHANNEL => callback_work.notify(),
+                    Ok(_) => {},
+                    Err(error) => {
+                        tracing::warn!(%error, "durable-work notification listener disconnected");
+                        break;
+                    }
+                }
+            }
         }
     }
 }
