@@ -1,6 +1,6 @@
 use agent_contracts::{
-    ContextError, HarnessContext, HistoryEntry, HistoryEntryId, HistoryQuery, HistorySequence,
-    OperationFailure, OperationId, OperationOutcome, OperationQuery,
+    AssetPublisher, ContextError, HarnessContext, HistoryEntry, HistoryEntryId, HistoryQuery,
+    HistorySequence, OperationFailure, OperationId, OperationOutcome, OperationQuery,
     OperationRecord as ContractOperation, SessionView, WaitId, WaitQuery,
     WaitRecord as ContractWait,
 };
@@ -18,6 +18,7 @@ pub(crate) struct StoreContext {
     history_through: HistorySequence,
     shutdown: CancellationToken,
     ownership_lost: Arc<AtomicBool>,
+    asset_publisher: Arc<dyn AssetPublisher>,
     infrastructure_failure: Mutex<Option<String>>,
 }
 
@@ -28,6 +29,7 @@ impl StoreContext {
         history_through: HistorySequence,
         shutdown: CancellationToken,
         ownership_lost: Arc<AtomicBool>,
+        asset_publisher: Arc<dyn AssetPublisher>,
     ) -> Self {
         Self {
             store,
@@ -35,6 +37,7 @@ impl StoreContext {
             history_through,
             shutdown,
             ownership_lost,
+            asset_publisher,
             infrastructure_failure: Mutex::new(None),
         }
     }
@@ -67,6 +70,21 @@ impl HarnessContext for StoreContext {
 
     fn stop_requested(&self) -> bool {
         self.shutdown.is_cancelled() || self.ownership_lost.load(Ordering::Acquire)
+    }
+
+    async fn publish_asset(
+        &self,
+        asset: agent_contracts::AssetUpload,
+    ) -> Result<agent_contracts::PublishedAsset, ContextError> {
+        if self.stop_requested() {
+            return Err(ContextError::Unavailable(
+                "asset publication stopped because the invocation is stopping".into(),
+            ));
+        }
+        self.asset_publisher
+            .publish(asset)
+            .await
+            .map_err(ContextError::Publish)
     }
 
     async fn history(&self, query: HistoryQuery) -> Result<Vec<HistoryEntry>, ContextError> {

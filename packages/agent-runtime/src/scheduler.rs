@@ -3,7 +3,7 @@ use crate::{
     context::StoreContext,
     outcome::{OutcomePreparationError, prepare_outcome},
 };
-use agent_contracts::{SessionEvent, SessionView};
+use agent_contracts::{AssetPublisher, SessionEvent, SessionView, UnavailableAssetPublisher};
 use agent_store::{
     ClaimedEvent, HandlerAttemptStatus, HandlerClaim, HandlerCommitError, OutcomeCommit, Store,
     StoreError,
@@ -140,6 +140,7 @@ pub struct SessionScheduler {
     store: Store,
     registry: Arc<HarnessRegistry>,
     settings: SchedulerSettings,
+    asset_publisher: Arc<dyn AssetPublisher>,
 }
 
 struct LeaseKeeper {
@@ -181,7 +182,13 @@ impl SessionScheduler {
             store,
             registry,
             settings,
+            asset_publisher: Arc::new(UnavailableAssetPublisher),
         })
+    }
+
+    pub fn with_asset_publisher(mut self, asset_publisher: Arc<dyn AssetPublisher>) -> Self {
+        self.asset_publisher = asset_publisher;
+        self
     }
 
     pub async fn process_one(&self, shutdown: CancellationToken) -> Result<bool, SchedulerError> {
@@ -317,6 +324,7 @@ impl SessionScheduler {
             claimed.history_through_sequence,
             shutdown,
             ownership_lost.clone(),
+            self.asset_publisher.clone(),
         );
         let handler = AssertUnwindSafe(harness.handle(
             &claimed.session.configuration,
