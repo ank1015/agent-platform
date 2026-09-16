@@ -1483,8 +1483,10 @@ async fn combined_server_restart_delivers_a_result_and_cleans_its_request() {
         .unwrap();
     assert!(matches!(duplicate, agent_store::EnqueueResult::Existing(_)));
 
-    let mut settings = ServerSettings::default();
-    settings.gateway_connections = vec![connection];
+    let mut settings = ServerSettings {
+        gateway_connections: vec![connection],
+        ..ServerSettings::default()
+    };
     settings.scheduler.poll_interval = Duration::from_millis(5);
     settings.dispatcher.poll_interval = Duration::from_millis(5);
     settings.dispatcher.request_retention = Duration::from_millis(50);
@@ -1520,10 +1522,9 @@ async fn combined_server_restart_delivers_a_result_and_cleans_its_request() {
                 .await
                 .unwrap()
                 .first()
+                && operation.status == OperationStatus::Accepted
             {
-                if operation.status == OperationStatus::Accepted {
-                    break operation.id;
-                }
+                break operation.id;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }

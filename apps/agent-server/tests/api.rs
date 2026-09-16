@@ -323,7 +323,11 @@ async fn authentication_and_discovery_do_not_require_a_database() {
         .0,
         StatusCode::OK
     );
-    assert!(build_registry().unwrap().descriptions().is_empty());
+    let production = build_registry().unwrap();
+    let descriptions = production.descriptions();
+    assert_eq!(descriptions.len(), 1);
+    assert_eq!(descriptions[0].id.0, "basic-codex");
+    assert_eq!(descriptions[0].version.0, "1");
 }
 
 #[tokio::test]

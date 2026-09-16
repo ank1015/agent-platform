@@ -1377,7 +1377,7 @@ mod tests {
         let generation = Uuid::new_v4();
         let machine = Uuid::new_v4();
         let response = json!({
-            "protocol_version": 1,
+            "protocol_version": execution::VERSION,
             "request_id": job_id,
             "generation_id": generation,
             "status": "error",
