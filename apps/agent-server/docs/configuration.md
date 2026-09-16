@@ -16,6 +16,9 @@ expected schema.
 | `AGENT_DATABASE_MAX_CONNECTIONS` | `10` | SQLx pool maximum connections per process |
 | `AGENT_DATABASE_ACQUIRE_TIMEOUT_MS` | `5000` | Pool acquisition timeout |
 | `AGENT_LISTEN` | `127.0.0.1:8080` | Bind address for `serve` |
+| `AGENT_IMAGE_BACKEND` | `local` | Image publisher: `local` or `gcs` |
+| `AGENT_IMAGE_BUCKET` | unset | GCS bucket name; required when the backend is `gcs` |
+| `AGENT_IMAGE_PUBLIC_BASE_URL` | `http://127.0.0.1:8080` | Public origin for the `local` backend only |
 | `AGENT_SERVICE_TOKENS` | required | Comma-separated backend bearer tokens; permits rotation |
 | `AGENT_MAX_BODY_BYTES` | `2097152` | Maximum request body, including callbacks |
 | `AGENT_MAX_CONCURRENT_SSE` | `200` | Simultaneous update streams **per process** (1–10000) |
@@ -26,6 +29,25 @@ constant time. Keep service tokens, gateway bearer tokens, and callback secrets
 out of source files and logs. The CLI hides environment values for credential
 fields; gateway connection `Debug` redacts bearer tokens. The trusted backend
 remains responsible for user/project authorization.
+
+`view_image` publishes prepared images through a platform-owned asset publisher.
+Images are limited to 5 MiB and content-addressed as `{sha256}.{extension}` so a
+replayed handler safely targets the same immutable object. With `local`, the
+server stores bytes in memory and serves unauthenticated
+`GET /media/images/{sha256}.{extension}`; these objects do not survive restart.
+With `gcs`, the server uploads to `AGENT_IMAGE_BUCKET` with a create-only
+generation precondition and returns
+`https://storage.googleapis.com/{bucket}/{sha256}.{extension}`. The bucket must
+allow unauthenticated reads of known objects because the model fetches the URL.
+It should deny public bucket listing. Do not expire these objects while retained
+conversation history can still reference them.
+
+The GCS client uses Google Application Default Credentials. Local development
+can use `gcloud auth application-default login`; deployed workloads should
+attach a service account with only `storage.objects.create` on the bucket. The
+provided dev script defaults to `gcs` and bucket
+`agent-platform-images-361197090477`; set `AGENT_IMAGE_BACKEND=local` to use the
+in-memory fallback.
 
 ## Session scheduler and handler execution
 
@@ -165,5 +187,5 @@ That script checks Rust formatting, ordinary tests, and all ignored database
 tests serially. The fixture harness and mock gateways exercise duplicate input,
 lost submission response, early callback, expired lease, stale handler, wait
 races, cancellation, restart recovery, cleanup, metrics, and graceful shutdown.
-The production harness registry is still empty until a real harness is
-registered; see [harness integration](harness-integration.md).
+The production registry includes the `basic-codex` harness; see
+[harness integration](harness-integration.md).

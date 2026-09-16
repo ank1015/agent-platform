@@ -94,8 +94,8 @@ session-state writes, direct event acknowledgement, or direct operation submissi
 unknown ID. The version detail returns `{ "id", "version", "name",
 "description", "configuration_schema" }`, where the schema is advertised JSON
 Schema. Session creation still runs the harness's authoritative semantic
-validation. The production registry is empty until harness crates are compiled
-and registered in the server.
+validation. The production registry currently includes `basic-codex` version
+`1`.
 
 ## Sessions
 
