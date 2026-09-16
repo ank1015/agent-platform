@@ -8,16 +8,23 @@ agent-contracts = { path = "../../packages/agent-contracts" }
 agent-gateways = { path = "../../packages/agent-gateways" }
 agent-runtime = { path = "../../packages/agent-runtime" }
 agent-store = { path = "../../packages/agent-store" }
+basic-codex-harness = { path = "../../packages/basic-codex-harness" }
+async-trait = "0.1"
 async-stream = "0.3"
 axum = "0.8"
 base64 = "0.22"
+bytes = "1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
+google-cloud-storage = "1.18.0"
 http = "1"
 futures-util = "0.3"
 jsonschema = { version = "0.50", default-features = false }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+rustls = { version = "0.23", features = ["ring"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
+sha2 = "0.10"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres"] }
 thiserror = "2"
 subtle = "2"
@@ -30,10 +37,8 @@ uuid = { version = "1", features = ["serde", "v4"] }
 
 [dev-dependencies]
 harness-fixture = { path = "../../tests/harness-fixture" }
-async-trait = "0.1"
 hex = "0.4"
 hmac = "0.12"
 http-body-util = "0.1"
 schemars = "1"
-sha2 = "0.10"
 tower = { version = "0.5", features = ["util"] }

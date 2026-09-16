@@ -7,6 +7,7 @@ members = [
     "packages/agent-store",
     "packages/agent-gateways",
     "packages/agent-test-support",
+    "packages/basic-codex-harness",
     "tests/harness-fixture",
 ]
 
