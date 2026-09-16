@@ -1,4 +1,4 @@
-use crate::{ServerSettings, validate_service_tokens};
+use crate::{ImageBackend, ServerSettings, validate_service_tokens};
 use agent_gateways::{GatewayCallbackConfig, GatewayConnectionConfig};
 use agent_runtime::{
     CompletionSettings, DispatcherSettings, RequestCleanupSettings, RetryPolicy, SchedulerSettings,
@@ -35,6 +35,24 @@ pub enum Command {
     Serve {
         #[arg(long, env = "AGENT_LISTEN", default_value = "127.0.0.1:8080")]
         listen: SocketAddr,
+
+        #[arg(
+            long,
+            env = "AGENT_IMAGE_BACKEND",
+            value_enum,
+            default_value_t = ImageBackend::Local
+        )]
+        image_backend: ImageBackend,
+
+        #[arg(long, env = "AGENT_IMAGE_BUCKET")]
+        image_bucket: Option<String>,
+
+        #[arg(
+            long,
+            env = "AGENT_IMAGE_PUBLIC_BASE_URL",
+            default_value = "http://127.0.0.1:8080"
+        )]
+        image_public_base_url: String,
 
         #[arg(
             long,
@@ -249,6 +267,9 @@ impl Config {
         let Command::Serve {
             max_body_bytes,
             max_concurrent_sse,
+            image_backend,
+            image_bucket,
+            image_public_base_url,
             shutdown_grace_ms,
             scheduler_enabled,
             wait_expiration_enabled,
@@ -347,6 +368,9 @@ impl Config {
             callback_connections: serde_json::from_str(gateway_callbacks)
                 .expect("gateway callbacks were validated"),
             callback_tolerance: Duration::from_millis(*callback_tolerance_ms),
+            image_backend: *image_backend,
+            image_bucket: image_bucket.clone(),
+            image_public_base_url: image_public_base_url.clone(),
             completion: CompletionSettings {
                 max_concurrent_results: *max_concurrent_results,
                 poll_interval: Duration::from_millis(*dispatch_poll_ms),
@@ -506,5 +530,33 @@ mod tests {
         ])
         .unwrap();
         assert!(invalid_gateway.validate().is_err());
+
+        let missing_gcs_bucket = Config::try_parse_from([
+            "agent-server",
+            "--database-url",
+            "postgresql:///agent_platform",
+            "serve",
+            "--tokens",
+            "token",
+            "--image-backend",
+            "gcs",
+        ])
+        .unwrap();
+        assert!(missing_gcs_bucket.validate().is_err());
+
+        let valid_gcs_bucket = Config::try_parse_from([
+            "agent-server",
+            "--database-url",
+            "postgresql:///agent_platform",
+            "serve",
+            "--tokens",
+            "token",
+            "--image-backend",
+            "gcs",
+            "--image-bucket",
+            "agent-platform-images-123",
+        ])
+        .unwrap();
+        assert!(valid_gcs_bucket.validate().is_ok());
     }
 }

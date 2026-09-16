@@ -1,10 +1,13 @@
 mod config;
 mod error;
+mod image_bucket;
 mod routes;
 
 pub use config::*;
 pub use error::*;
+pub use image_bucket::{GcsImageBucket, LocalImageBucket};
 
+use agent_contracts::AssetPublisher;
 use agent_gateways::{
     CallbackVerifierRegistry, GatewayCallbackConfig, GatewayConnectionConfig, GatewayRegistry,
 };
@@ -15,6 +18,7 @@ use agent_runtime::{
 };
 use agent_store::Store;
 use axum::{Router, extract::DefaultBodyLimit, middleware, routing::get};
+use basic_codex_harness::BasicCodexHarness;
 use std::{
     future::{Future, IntoFuture},
     net::SocketAddr,
@@ -28,6 +32,19 @@ use tokio_util::sync::CancellationToken;
 
 pub const DEFAULT_MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
 pub const DEFAULT_SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, clap::ValueEnum)]
+pub enum ImageBackend {
+    #[default]
+    Local,
+    Gcs,
+}
+
+#[derive(Clone)]
+struct AssetPublishing {
+    publisher: Arc<dyn AssetPublisher>,
+    local_bucket: Option<Arc<LocalImageBucket>>,
+}
 
 #[derive(Clone)]
 pub struct ServerSettings {
@@ -44,6 +61,9 @@ pub struct ServerSettings {
     pub gateway_connections: Vec<GatewayConnectionConfig>,
     pub callback_connections: Vec<GatewayCallbackConfig>,
     pub callback_tolerance: Duration,
+    pub image_backend: ImageBackend,
+    pub image_bucket: Option<String>,
+    pub image_public_base_url: String,
 }
 
 impl Default for ServerSettings {
@@ -62,6 +82,9 @@ impl Default for ServerSettings {
             gateway_connections: Vec::new(),
             callback_connections: Vec::new(),
             callback_tolerance: Duration::from_secs(300),
+            image_backend: ImageBackend::Local,
+            image_bucket: None,
+            image_public_base_url: "http://127.0.0.1:8080".into(),
         }
     }
 }
@@ -100,6 +123,24 @@ impl ServerSettings {
             return Err(ServerError::InvalidConfiguration(
                 "callback tolerance must be greater than zero",
             ));
+        }
+        match self.image_backend {
+            ImageBackend::Local => {
+                LocalImageBucket::validate_public_base_url(&self.image_public_base_url).map_err(
+                    |_| ServerError::InvalidConfiguration("invalid image public base URL"),
+                )?;
+            }
+            ImageBackend::Gcs => {
+                let bucket =
+                    self.image_bucket
+                        .as_deref()
+                        .ok_or(ServerError::InvalidConfiguration(
+                            "Google Cloud Storage image backend requires an image bucket",
+                        ))?;
+                GcsImageBucket::validate_bucket_name(bucket).map_err(|_| {
+                    ServerError::InvalidConfiguration("invalid Google Cloud Storage image bucket")
+                })?;
+            }
         }
         GatewayRegistry::from_configs(self.gateway_connections.clone())?;
         CallbackVerifierRegistry::from_configs(self.callback_connections.clone())?;
@@ -165,7 +206,18 @@ pub struct AppState {
 }
 
 pub fn build_registry() -> Result<HarnessRegistry, agent_runtime::RuntimeError> {
-    Ok(HarnessRegistry::new())
+    let llm_connection_id =
+        std::env::var("AGENT_LLM_CONNECTION_ID").unwrap_or_else(|_| "llm-primary".into());
+    let execution_connection_id = std::env::var("AGENT_EXECUTION_CONNECTION_ID")
+        .unwrap_or_else(|_| "execution-primary".into());
+    let harness = BasicCodexHarness::new(
+        agent_contracts::GatewayConnectionId(llm_connection_id),
+        agent_contracts::GatewayConnectionId(execution_connection_id),
+    )
+    .map_err(|error| agent_runtime::RuntimeError::InvalidConfiguration(error.to_string()))?;
+    let mut registry = HarnessRegistry::new();
+    registry.register(harness)?;
+    Ok(registry)
 }
 
 pub fn app(store: Store, registry: HarnessRegistry, tokens: Vec<String>) -> Router {
@@ -178,7 +230,33 @@ pub fn app_with_settings(
     tokens: Vec<String>,
     settings: ServerSettings,
 ) -> (Router, Readiness) {
-    app_with_shared_registry(store, Arc::new(registry), tokens, settings)
+    let image_bucket = Arc::new(
+        LocalImageBucket::new(settings.image_public_base_url.clone())
+            .expect("server settings were validated"),
+    );
+    app_with_shared_registry(
+        store,
+        Arc::new(registry),
+        tokens,
+        settings,
+        Some(image_bucket),
+    )
+}
+
+pub fn app_with_settings_and_image_bucket(
+    store: Store,
+    registry: HarnessRegistry,
+    tokens: Vec<String>,
+    settings: ServerSettings,
+    image_bucket: Arc<LocalImageBucket>,
+) -> (Router, Readiness) {
+    app_with_shared_registry(
+        store,
+        Arc::new(registry),
+        tokens,
+        settings,
+        Some(image_bucket),
+    )
 }
 
 fn app_with_shared_registry(
@@ -186,6 +264,7 @@ fn app_with_shared_registry(
     registry: Arc<HarnessRegistry>,
     tokens: Vec<String>,
     settings: ServerSettings,
+    image_bucket: Option<Arc<LocalImageBucket>>,
 ) -> (Router, Readiness) {
     let readiness = Readiness::accepting();
     let callback_verifiers = Arc::new(
@@ -227,10 +306,14 @@ fn app_with_shared_registry(
     ));
     let api = Router::new().merge(callbacks).merge(authenticated_api);
 
-    let router = Router::new()
+    let mut router = Router::new()
         .route("/healthz", get(routes::health::health))
         .route("/readyz", get(routes::health::ready))
-        .nest("/v1", api)
+        .nest("/v1", api);
+    if let Some(image_bucket) = image_bucket {
+        router = router.merge(image_bucket::router(image_bucket));
+    }
+    let router = router
         .fallback(routes::not_found)
         .method_not_allowed_fallback(routes::method_not_allowed)
         .layer(DefaultBodyLimit::max(settings.max_body_bytes))
@@ -261,7 +344,58 @@ pub async fn serve(
     tokens: Vec<String>,
     settings: ServerSettings,
 ) -> Result<(), ServerError> {
-    serve_with_shutdown(listen, store, registry, tokens, settings, shutdown_signal()).await
+    let image_bucket = Arc::new(
+        LocalImageBucket::new(settings.image_public_base_url.clone())
+            .map_err(|_| ServerError::InvalidConfiguration("invalid image public base URL"))?,
+    );
+    serve_with_image_bucket(listen, store, registry, tokens, settings, image_bucket).await
+}
+
+pub async fn serve_with_image_bucket(
+    listen: SocketAddr,
+    store: Store,
+    registry: HarnessRegistry,
+    tokens: Vec<String>,
+    settings: ServerSettings,
+    image_bucket: Arc<LocalImageBucket>,
+) -> Result<(), ServerError> {
+    serve_with_shutdown_and_asset_publisher(
+        listen,
+        store,
+        registry,
+        tokens,
+        settings,
+        AssetPublishing {
+            publisher: image_bucket.clone(),
+            local_bucket: Some(image_bucket),
+        },
+        shutdown_signal(),
+    )
+    .await
+}
+
+pub async fn serve_with_asset_publisher(
+    listen: SocketAddr,
+    store: Store,
+    registry: HarnessRegistry,
+    tokens: Vec<String>,
+    settings: ServerSettings,
+    asset_publisher: Arc<dyn AssetPublisher>,
+    local_image_bucket: Option<Arc<LocalImageBucket>>,
+) -> Result<(), ServerError> {
+    serve_with_shutdown_and_asset_publisher(
+        listen,
+        store,
+        registry,
+        tokens,
+        settings,
+        AssetPublishing {
+            publisher: asset_publisher,
+            local_bucket: local_image_bucket,
+        },
+        shutdown_signal(),
+    )
+    .await
 }
 
 pub async fn serve_with_shutdown<F>(
@@ -275,13 +409,53 @@ pub async fn serve_with_shutdown<F>(
 where
     F: Future<Output = ()> + Send + 'static,
 {
+    let image_bucket = Arc::new(
+        LocalImageBucket::new(settings.image_public_base_url.clone())
+            .map_err(|_| ServerError::InvalidConfiguration("invalid image public base URL"))?,
+    );
+    serve_with_shutdown_and_asset_publisher(
+        listen,
+        store,
+        registry,
+        tokens,
+        settings,
+        AssetPublishing {
+            publisher: image_bucket.clone(),
+            local_bucket: Some(image_bucket),
+        },
+        shutdown,
+    )
+    .await
+}
+
+async fn serve_with_shutdown_and_asset_publisher<F>(
+    listen: SocketAddr,
+    store: Store,
+    registry: HarnessRegistry,
+    tokens: Vec<String>,
+    settings: ServerSettings,
+    asset_publishing: AssetPublishing,
+    shutdown: F,
+) -> Result<(), ServerError>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
     validate_service_tokens(&tokens)?;
     let settings = settings.validate()?;
     if !store.schema_ready().await? {
         return Err(ServerError::SchemaNotReady);
     }
     let listener = tokio::net::TcpListener::bind(listen).await?;
-    run_listener(listener, store, registry, tokens, settings, shutdown).await
+    run_listener(
+        listener,
+        store,
+        registry,
+        tokens,
+        settings,
+        asset_publishing,
+        shutdown,
+    )
+    .await
 }
 
 pub async fn serve_on_listener_with_shutdown<F>(
@@ -295,12 +469,28 @@ pub async fn serve_on_listener_with_shutdown<F>(
 where
     F: Future<Output = ()> + Send + 'static,
 {
+    let image_bucket = Arc::new(
+        LocalImageBucket::new(settings.image_public_base_url.clone())
+            .map_err(|_| ServerError::InvalidConfiguration("invalid image public base URL"))?,
+    );
     validate_service_tokens(&tokens)?;
     let settings = settings.validate()?;
     if !store.schema_ready().await? {
         return Err(ServerError::SchemaNotReady);
     }
-    run_listener(listener, store, registry, tokens, settings, shutdown).await
+    run_listener(
+        listener,
+        store,
+        registry,
+        tokens,
+        settings,
+        AssetPublishing {
+            publisher: image_bucket.clone(),
+            local_bucket: Some(image_bucket),
+        },
+        shutdown,
+    )
+    .await
 }
 
 async fn run_listener<F>(
@@ -309,6 +499,7 @@ async fn run_listener<F>(
     registry: HarnessRegistry,
     tokens: Vec<String>,
     settings: ServerSettings,
+    asset_publishing: AssetPublishing,
     shutdown: F,
 ) -> Result<(), ServerError>
 where
@@ -317,7 +508,8 @@ where
     let address = listener.local_addr()?;
     let registry = Arc::new(registry);
     let scheduler =
-        SessionScheduler::new(store.clone(), registry.clone(), settings.scheduler.clone())?;
+        SessionScheduler::new(store.clone(), registry.clone(), settings.scheduler.clone())?
+            .with_asset_publisher(asset_publishing.publisher);
     let gateways = Arc::new(GatewayRegistry::from_configs(
         settings.gateway_connections.clone(),
     )?);
@@ -328,8 +520,13 @@ where
         WaitExpirationWorker::new(store.clone(), settings.wait_expiration.clone())?;
     let request_cleanup =
         RequestCleanupWorker::new(store.clone(), settings.request_cleanup.clone())?;
-    let (router, readiness) =
-        app_with_shared_registry(store.clone(), registry, tokens, settings.clone());
+    let (router, readiness) = app_with_shared_registry(
+        store.clone(),
+        registry,
+        tokens,
+        settings.clone(),
+        asset_publishing.local_bucket,
+    );
     let stop = CancellationToken::new();
     let server_stop = stop.clone();
     tracing::info!(%address, "agent server listening");
