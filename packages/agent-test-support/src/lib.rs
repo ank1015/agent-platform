@@ -1,12 +1,16 @@
 //! In-memory session-scoped context for testing independent harness crates.
 
 use agent_contracts::{
-    ContextError, HarnessContext, HistoryEntry, HistoryEntryId, HistoryQuery, HistorySequence,
-    OperationId, OperationQuery, OperationRecord, SessionView, WaitId, WaitQuery, WaitRecord,
+    AssetPublisher, ContextError, HarnessContext, HistoryEntry, HistoryEntryId, HistoryQuery,
+    HistorySequence, OperationId, OperationQuery, OperationRecord, SessionView,
+    UnavailableAssetPublisher, WaitId, WaitQuery, WaitRecord,
 };
 use async_trait::async_trait;
 use serde::de::DeserializeOwned;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 pub struct MemoryContext {
     session: SessionView,
@@ -15,6 +19,7 @@ pub struct MemoryContext {
     operations: Vec<(OperationId, String)>,
     waits: Vec<(WaitId, String)>,
     stop_requested: AtomicBool,
+    asset_publisher: Arc<dyn AssetPublisher>,
 }
 
 impl MemoryContext {
@@ -26,7 +31,13 @@ impl MemoryContext {
             operations: Vec::new(),
             waits: Vec::new(),
             stop_requested: AtomicBool::new(false),
+            asset_publisher: Arc::new(UnavailableAssetPublisher),
         }
+    }
+
+    pub fn with_asset_publisher(mut self, asset_publisher: Arc<dyn AssetPublisher>) -> Self {
+        self.asset_publisher = asset_publisher;
+        self
     }
 
     pub fn add_history(&mut self, entry: &HistoryEntry) -> Result<(), serde_json::Error> {
@@ -75,6 +86,21 @@ impl HarnessContext for MemoryContext {
 
     fn stop_requested(&self) -> bool {
         self.stop_requested.load(Ordering::Relaxed)
+    }
+
+    async fn publish_asset(
+        &self,
+        asset: agent_contracts::AssetUpload,
+    ) -> Result<agent_contracts::PublishedAsset, ContextError> {
+        if self.stop_requested() {
+            return Err(ContextError::Unavailable(
+                "asset publication stopped because the invocation is stopping".into(),
+            ));
+        }
+        self.asset_publisher
+            .publish(asset)
+            .await
+            .map_err(ContextError::Publish)
     }
 
     async fn history(&self, query: HistoryQuery) -> Result<Vec<HistoryEntry>, ContextError> {
