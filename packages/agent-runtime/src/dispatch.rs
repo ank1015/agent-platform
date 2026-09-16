@@ -1,3 +1,4 @@
+use crate::WorkSignal;
 use agent_contracts::{
     FailureSource, LlmRequest, OperationFailure, OperationKind, OperationRequest, OperationResult,
 };
@@ -110,6 +111,7 @@ pub struct OperationDispatcher {
     gateways: Arc<GatewayRegistry>,
     settings: DispatcherSettings,
     phase_cursor: Arc<AtomicUsize>,
+    work_signal: Option<WorkSignal>,
 }
 
 struct OperationLeaseKeeper {
@@ -148,7 +150,13 @@ impl OperationDispatcher {
             gateways,
             settings,
             phase_cursor: Arc::new(AtomicUsize::new(0)),
+            work_signal: None,
         })
+    }
+
+    pub fn with_work_signal(mut self, signal: WorkSignal) -> Self {
+        self.work_signal = Some(signal);
+        self
     }
 
     pub async fn process_one(&self) -> Result<bool, DispatcherError> {
@@ -191,6 +199,7 @@ impl OperationDispatcher {
         }
         let mut workers = JoinSet::new();
         'run: loop {
+            let observed = self.work_signal.as_ref().map(WorkSignal::snapshot);
             while workers.len() < self.settings.max_concurrent_dispatches {
                 if shutdown.is_cancelled() {
                     break 'run;
@@ -214,12 +223,22 @@ impl OperationDispatcher {
                     }
                 }
             }
-            tokio::select! {
-                _ = shutdown.cancelled() => break,
-                result = workers.join_next(), if !workers.is_empty() => {
-                    if let Some(Err(error)) = result { return Err(DispatcherError::Worker(error.to_string())); }
+            if let (Some(signal), Some(generation)) = (&self.work_signal, observed) {
+                tokio::select! {
+                    _ = shutdown.cancelled() => break,
+                    result = workers.join_next(), if !workers.is_empty() => {
+                        if let Some(Err(error)) = result { return Err(DispatcherError::Worker(error.to_string())); }
+                    }
+                    _ = signal.wait(generation, self.settings.poll_interval) => {}
                 }
-                _ = tokio::time::sleep(self.settings.poll_interval) => {}
+            } else {
+                tokio::select! {
+                    _ = shutdown.cancelled() => break,
+                    result = workers.join_next(), if !workers.is_empty() => {
+                        if let Some(Err(error)) = result { return Err(DispatcherError::Worker(error.to_string())); }
+                    }
+                    _ = tokio::time::sleep(self.settings.poll_interval) => {}
+                }
             }
         }
         let deadline = tokio::time::sleep(self.settings.shutdown_grace);

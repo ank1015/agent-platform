@@ -7,12 +7,14 @@ mod outcome;
 mod request_cleanup;
 mod scheduler;
 mod wait_expiration;
+mod work_signal;
 
 pub use completion::*;
 pub use dispatch::*;
 pub use request_cleanup::*;
 pub use scheduler::*;
 pub use wait_expiration::*;
+pub use work_signal::*;
 
 use agent_contracts::{
     HandlerOutcome, Harness, HarnessContext, HarnessDescription, HarnessId, HarnessVersion,
