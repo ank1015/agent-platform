@@ -19,6 +19,9 @@ use sqlx::{PgPool, Postgres, QueryBuilder, Row, postgres::PgPoolOptions, types::
 use std::time::Duration;
 use uuid::Uuid;
 
+pub const OPERATION_READY_CHANNEL: &str = "agent_platform_operation_ready";
+pub const CALLBACK_READY_CHANNEL: &str = "agent_platform_callback_ready";
+
 #[derive(Clone, Debug)]
 pub struct PoolConfig {
     pub max_connections: u32,
@@ -978,6 +981,12 @@ impl Store {
             &json!({"event_id":claim.event_id,"status":"handled"}),
         )
         .await?;
+        if !outcome.operations.is_empty() {
+            sqlx::query("SELECT pg_notify($1, '')")
+                .bind(OPERATION_READY_CHANNEL)
+                .execute(&mut *tx)
+                .await?;
+        }
         tx.commit()
             .await
             .map_err(crate::HandlerCommitError::from_commit)
@@ -1990,6 +1999,12 @@ impl Store {
             && (receipt.gateway_job_id != gateway_job_id || receipt.payload.get() != payload.get())
         {
             return Err(StoreError::IdempotencyConflict);
+        }
+        if inserted.rows_affected() == 1 {
+            sqlx::query("SELECT pg_notify($1, '')")
+                .bind(CALLBACK_READY_CHANNEL)
+                .execute(&mut *tx)
+                .await?;
         }
         tx.commit().await?;
         Ok(receipt)

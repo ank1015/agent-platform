@@ -4,13 +4,14 @@ use agent_contracts::{
     WaitMode,
 };
 use agent_store::{
-    EnqueueResult, EventStatus, EventType, HandlerAttemptStatus, HandlerClaim, MIGRATOR,
-    NewExternalEvent, NewHistoryEntry, NewOperation, NewSession, NewWait, OperationPhase,
-    OperationStatus, OutcomeCommit, PoolConfig, SessionFilter, Store, StoreError, WaitStatus,
+    CALLBACK_READY_CHANNEL, EnqueueResult, EventStatus, EventType, HandlerAttemptStatus,
+    HandlerClaim, MIGRATOR, NewExternalEvent, NewHistoryEntry, NewOperation, NewSession, NewWait,
+    OPERATION_READY_CHANNEL, OperationPhase, OperationStatus, OutcomeCommit, PoolConfig,
+    SessionFilter, Store, StoreError, WaitStatus,
 };
 use chrono::{Duration as ChronoDuration, Utc};
 use serde_json::{json, value::RawValue};
-use sqlx::PgPool;
+use sqlx::{PgPool, postgres::PgListener};
 use std::time::Duration;
 use url::Url;
 use uuid::Uuid;
@@ -104,6 +105,64 @@ fn empty_outcome(state: &str) -> OutcomeCommit {
         operations: vec![],
         waits: vec![],
     }
+}
+
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL; creates and drops disposable databases"]
+async fn durable_work_commits_emit_transactional_notifications() {
+    let db = Database::new().await;
+    let mut listener = PgListener::connect_with(db.store.pool()).await.unwrap();
+    listener.listen(OPERATION_READY_CHANNEL).await.unwrap();
+    listener.listen(CALLBACK_READY_CHANNEL).await.unwrap();
+
+    let session_id = session(&db.store, "notifications").await;
+    input(&db.store, session_id, "message").await;
+    let claim = db
+        .store
+        .claim_next_event(Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
+    db.store
+        .commit_handler_outcome(
+            &HandlerClaim::from(&claim),
+            OutcomeCommit {
+                operations: vec![NewOperation {
+                    id: OperationId::new(),
+                    kind: OperationKind::Llm,
+                    gateway_connection_id: Some(GatewayConnectionId("llm".into())),
+                    target_operation_id: None,
+                    previous_operation_id: None,
+                    request: raw(r#"{"messages":[]}"#),
+                }],
+                ..empty_outcome("{}")
+            },
+        )
+        .await
+        .unwrap();
+    let operation = tokio::time::timeout(Duration::from_secs(1), listener.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(operation.channel(), OPERATION_READY_CHANNEL);
+
+    db.store
+        .record_callback_receipt(
+            GatewayConnectionId("llm".into()),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            raw(r#"{"type":"job.succeeded"}"#).as_ref(),
+        )
+        .await
+        .unwrap();
+    let callback = tokio::time::timeout(Duration::from_secs(1), listener.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(callback.channel(), CALLBACK_READY_CHANNEL);
+
+    drop(listener);
+    db.close().await;
 }
 
 #[tokio::test]
