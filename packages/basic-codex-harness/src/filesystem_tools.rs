@@ -102,6 +102,11 @@ pub(crate) fn prepare_ready(
             } else {
                 BatchMode::Parallel
             },
+            accepted_error_codes: if state.phase == ApplyPatchPhase::Reconciling {
+                vec![ErrorCode::NotFound]
+            } else {
+                Vec::new()
+            },
             operations,
         }),
         expected_generation_id: if state.phase == ApplyPatchPhase::Mutating {
@@ -218,6 +223,7 @@ fn prepare_apply_patch(
     Ok(PreparedFileOperation {
         request: Payload::Batch(Batch {
             mode: BatchMode::Parallel,
+            accepted_error_codes: vec![ErrorCode::NotFound],
             operations,
         }),
         expected_generation_id: None,
@@ -1034,6 +1040,56 @@ mod tests {
             apply_chunks("file.txt", "first\nsecond\n", chunks).unwrap(),
             "first\nsecond\nthird\n"
         );
+    }
+
+    #[test]
+    fn apply_patch_accepts_missing_files_only_during_read_phases() {
+        let config = BasicCodexConfig {
+            account_id: Uuid::new_v4(),
+            provider: crate::BasicCodexProvider::Openai,
+            model: crate::BasicCodexModel::Luna,
+            reasoning_effort: crate::ReasoningEffort::Medium,
+            machine_id: Uuid::new_v4(),
+            cwd: crate::WorkingDirectory::new("/workspace").unwrap(),
+            shell: None,
+            platform: None,
+            additional_instructions: None,
+        };
+        let call = ToolCallState {
+            call_id: "call-apply-read".into(),
+            name: "apply_patch".into(),
+            ordinal: 0,
+            kind: crate::state::ToolCallKind::Custom,
+            input: ToolInput::Text(
+                "*** Begin Patch\n*** Add File: hello.txt\n+hello\n*** End Patch\n".into(),
+            ),
+            scheduling: crate::state::ToolScheduling::Exclusive,
+            status: crate::state::ToolCallStatus::Pending,
+        };
+
+        let prepared = prepare_apply_patch(&call, &config).unwrap();
+        let Payload::Batch(reads) = prepared.request else {
+            panic!("apply_patch must begin with a read batch");
+        };
+        assert_eq!(reads.accepted_error_codes, [ErrorCode::NotFound]);
+
+        let FileToolState::ApplyPatch(mut state) = prepared.progress else {
+            panic!("apply_patch progress must be retained");
+        };
+        state.phase = ApplyPatchPhase::Mutating;
+        state.generation_id = Some(Uuid::new_v4());
+        state.mutations = vec![PatchMutation::Write {
+            mutation_id: "mutation".into(),
+            path: "hello.txt".into(),
+            data_base64: STANDARD.encode(b"hello\n"),
+            desired_sha256: sha256(b"hello\n"),
+            expected_sha256: None,
+        }];
+        let prepared = prepare_ready(FileToolState::ApplyPatch(state), &config).unwrap();
+        let Payload::Batch(mutations) = prepared.request else {
+            panic!("apply_patch mutations must use a batch");
+        };
+        assert!(mutations.accepted_error_codes.is_empty());
     }
 
     #[test]

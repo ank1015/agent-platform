@@ -257,6 +257,7 @@ fn prepare_write(
         };
         Payload::Batch(execution::Batch {
             mode: BatchMode::Sequential,
+            accepted_error_codes: Vec::new(),
             operations: vec![
                 execution::BatchOperation {
                     request_id: "interaction".into(),
