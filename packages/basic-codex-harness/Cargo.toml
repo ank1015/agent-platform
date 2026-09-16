@@ -1,0 +1,24 @@
+[package]
+name = "basic-codex-harness"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+agent-contracts = { path = "../agent-contracts" }
+async-trait = "0.1"
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
+jsonschema = { version = "0.50", default-features = false }
+schemars = { version = "1", features = ["uuid1"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+sha2 = "0.10"
+thiserror = "2"
+uuid = { version = "1", features = ["serde", "v4"] }
+
+[dev-dependencies]
+agent-runtime = { path = "../agent-runtime" }
+agent-test-support = { path = "../agent-test-support" }
+chrono = "0.4"
+tokio = { version = "1", features = ["macros", "rt"] }
